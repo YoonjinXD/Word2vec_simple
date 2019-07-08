@@ -1,90 +1,276 @@
 import torch
+import numpy as np
+import random
 from random import shuffle
 from collections import Counter
 import argparse
+from huffman import HuffmanCoding
 
-def to_one_hot_encoding(data_point_index, length):
-    one_hot_encoding = torch.zeros(1, length)
-    one_hot_encoding[0][data_point_index] = 1
-    return one_hot_encoding
+class Node:
+    def __init__(self, index):
+        self.index = index
+        self.left = None
+        self.right = None
 
-def skipgram(centerWord, contextWord, inputMatrix, outputMatrix):
-################################  Input  ################################
-# centerWord : Index of a centerword (type:int)                         #
-# contextWord : Index of a contextword (type:int)                       #
-# inputMatrix : Weight matrix of input (type:torch.tesnor(V,D))         #
-# outputMatrix : Weight matrix of output (type:torch.tesnor(V,D))       #
-#########################################################################
+class HuffmanTree:
 
-###############################  Output  ################################
-# loss : Loss value (type:torch.tensor(1))                              #
-# grad_in : Gradient of inputMatrix (type:torch.tensor(1,D))            #
-# grad_out : Gradient of outputMatrix (type:torch.tesnor(V,D))          #
-#########################################################################
+    def __init__(self, codes):
+        self.root = Node(0)
+        self.node_count = 1
+        self.buildTree(codes)
 
-    # One-Hot Enconding
-    numwords = inputMatrix.size()[0]
-    centerHot = to_one_hot_encoding(centerWord, numwords)
-    answerHot = to_one_hot_encoding(contextWord, numwords)
+    def buildTree(self, codes):
+        for code in codes:
+            current_node = self.root
+            for i, path in enumerate(code):
+                # Terminate before the 'word' node
+                if(i == len(code)-1):
+                    break
 
-    # Forward
-    hidden_layer = centerHot.mm(inputMatrix)
-    output_layer = torch.exp(hidden_layer.mm(outputMatrix.t()))
-    softmax = output_layer / torch.sum(output_layer, dim=1, keepdim=True)
+                if(path == '0'):
+                    # if the next node is not defined yet, define the node.
+                    if(current_node.left == None):
+                        current_node.left = Node(self.node_count)
+                        self.node_count += 1
 
-    # Cross Entropy
-    nll = -1 * torch.log(softmax)
-    loss = nll.mm(answerHot.t())
+                    # Move to the next node
+                    current_node = current_node.left
 
-    # Backward
-    grad_softmax = softmax.sub(answerHot)
-    grad_out = ((hidden_layer.t()).mm(grad_softmax)).t()
-    grad_hidden_layer = grad_softmax.mm(outputMatrix)
-    grad_in = ((centerHot.t()).mm(grad_hidden_layer))[centerWord]
+                elif(path == '1'):
+                    # if the next node is not defined yet, define the node.
+                    if (current_node.right == None):
+                        current_node.right = Node(self.node_count)
+                        self.node_count += 1
+
+                    # Move to the next node
+                    current_node = current_node.right
+
+        # Confirmation Message
+        print("Created Huffman Code Tree. The number of nodes: ", self.node_count)
+
+def FindPath(code, tree):
+    current_node = tree.root
+    path_nodes = [current_node.index, ]
+
+    for path in code:
+        if (path == '0'):
+            current_node = current_node.left
+        elif(path == '1'):
+            current_node = current_node.right
+        else: pass
+
+        if(current_node == None):
+            return path_nodes
+        path_nodes.append(current_node.index)
+
+
+def Analogical_Reasoning_Task(embedding):
+    #######################  Input  #########################
+    # embedding : Word embedding (type:torch.tesnor(V,D))   #
+    #########################################################
+
+    text = open('questions-words.txt', mode='r').readlines()
+
+    max_sim = -1
+    corrects = 0
+    no_word_count = 0
+
+    print("Start Analogical Reasoning Task... with %d sentences" % len(text))
+
+    for i, sentence in enumerate(text):
+
+        max_sim = -1
+        pred_word = None
+        words = (sentence.lower()).split()
+        flag = 0
+        # Error Handling
+        if (len(words) != 4):
+            continue
+        for word in words:
+            if word not in embedding.keys():
+                no_word_count += 1
+                flag = 1
+                break
+        if (flag == 1): continue
+
+        pred_vec = embedding[words[1]] - embedding[words[0]] + embedding[words[2]]
+
+        for word, vector in embedding.items():
+
+            cosine_sim = torch.cosine_similarity(vector, pred_vec, 0)
+
+            if (cosine_sim > max_sim):
+                max_sim = cosine_sim
+                pred_word = word
+
+        # For test
+        if (pred_word == words[3]):
+            corrects += 1
+            print("Correct!", words, pred_word, corrects)
+
+        # Iteration Checking
+        if (i % 2000 == 0):
+            print(i, "iterations =>", words, pred_word, cosine_sim, max_sim)
+
+    print("Total Correct Answers: ", corrects, "when the # of words is ", len(text))
+    print("\n[Acuuracy]: ", (corrects / len(text)), "[Words not in corpus]: ", no_word_count)
+
+
+
+def subsampling(word_seq):
+###############################  Output  #########################################
+# subsampled : Subsampled sequence                                               #
+##################################################################################
+
+    words_count = Counter(word_seq)
+    total_count = len(word_seq)
+    words_freq = {word: count/total_count for word, count in words_count.items()}
+
+    prob = {}
+
+    for word in words_freq:
+        prob[word] = 1 - np.sqrt(0.00001/words_freq[word])
+
+    subsampled = [word for word in word_seq if random.random() < (1 - prob[word])]
+    return subsampled
+
+def skipgram_HS(centerWord, contextCode, inputMatrix, outputMatrix):
+################################  Input  ##########################################
+# centerWord : Index of a centerword (type:int)                                   #
+# contextCode : Code of a contextword (type:str)                                  #
+# inputMatrix : Weight matrix of input (type:torch.tesnor(V,D))                   #
+# outputMatrix : Activated weight matrix of output (type:torch.tesnor(K,D))       #
+###################################################################################
+
+###############################  Output  ##########################################
+# loss : Loss value (type:torch.tensor(1))                                        #
+# grad_in : Gradient of inputMatrix (type:torch.tensor(1,D))                      #
+# grad_out : Gradient of outputMatrix (type:torch.tesnor(K,D))                    #
+###################################################################################
+
+    V, D = inputMatrix.size()
+    inputVector = inputMatrix[centerWord]
+    out = outputMatrix.mm(inputVector.view(D, 1))
+
+
+    out_for_loss = torch.sigmoid(out)
+    for i, path in enumerate(contextCode):
+        if (path == '1'):
+            out_for_loss[i] = 1 - out_for_loss[i]
+
+    loss = -torch.log(out_for_loss).sum()
+
+    grad = torch.sigmoid(out)
+    for i, path in enumerate(contextCode):
+        if (path == '0'):
+            grad[i] -= 1
+
+    grad_in = grad.view(1,-1).mm(outputMatrix)
+    grad_out = grad.mm(inputVector.view(1,-1))
 
     return loss, grad_in, grad_out
 
-def CBOW(centerWord, contextWords, inputMatrix, outputMatrix):
-################################  Input  ################################
-# centerWord : Index of a centerword (type:int)                         #
-# contextWords : Indices of contextwords (type:list(int))               #
-# inputMatrix : Weight matrix of input (type:torch.tesnor(V,D))         #
-# outputMatrix : Weight matrix of output (type:torch.tesnor(V,D))       #
-#########################################################################
 
-###############################  Output  ################################
-# loss : Loss value (type:torch.tensor(1))                              #
-# grad_in : Gradient of inputMatrix (type:torch.tensor(1,D))            #
-# grad_out : Gradient of outputMatrix (type:torch.tesnor(V,D))          #
-#########################################################################
 
-    # One-Hot Enconding
-    numwords = inputMatrix.size()[0]
-    centerHot = to_one_hot_encoding(centerWord, numwords)
-    contextHot = torch.zeros(1, numwords)
+def skipgram_NS(centerWord, inputMatrix, outputMatrix):
+################################  Input  ##########################################
+# centerWord : Index of a centerword (type:int)                                   #
+# inputMatrix : Weight matrix of input (type:torch.tesnor(V,D))                   #
+# outputMatrix : Activated weight matrix of output (type:torch.tesnor(K,D))       #
+###################################################################################
 
-    for i, word in enumerate(contextWords):
-        contextHot = contextHot.add(to_one_hot_encoding(word, numwords))
+###############################  Output  ##########################################
+# loss : Loss value (type:torch.tensor(1))                                        #
+# grad_in : Gradient of inputMatrix (type:torch.tensor(1,D))                      #
+# grad_out : Gradient of outputMatrix (type:torch.tesnor(K,D))                    #
+###################################################################################
 
-    # Forward
-    hidden_layer = contextHot.mm(inputMatrix)
-    output_layer = torch.exp(hidden_layer.mm(outputMatrix.t()))
-    softmax = output_layer / torch.sum(output_layer, dim=1, keepdim=True)
+    V, D = inputMatrix.size()
+    inputVector = inputMatrix[centerWord]
+    out = outputMatrix.mm(inputVector.view(D, 1))
 
-    # Cross Entropy
-    nll = -1 * torch.log(softmax)
-    loss = nll.mm(centerHot.t())
+    out_for_loss = -out
+    out_for_loss[0] = -out_for_loss[0]
 
-    # Backward
-    grad_softmax = softmax.sub(centerHot)
-    grad_out = ((hidden_layer.t()).mm(grad_softmax)).t()
-    grad_hidden_layer = grad_softmax.mm(outputMatrix)
-    grad_in = ((centerHot.t()).mm(grad_hidden_layer))[centerWord]
+    loss = -torch.log(torch.sigmoid(out_for_loss)).sum()
+
+    grad = torch.sigmoid(out)
+    grad[0] -= 1
+
+    grad_in = grad.view(1,-1).mm(outputMatrix)
+    grad_out = grad.mm(inputVector.view(1,-1))
 
     return loss, grad_in, grad_out
 
 
-def word2vec_trainer(train_seq, numwords, stats, mode="CBOW", dimension=100, learning_rate=0.025, epoch=3):
+def CBOW_HS(contextWords, centerCode, inputMatrix, outputMatrix):
+################################  Input  ##########################################
+# contextWords : Indices of contextwords (type:list(int))                          #
+# centerCode : Code of a centerword (type:str)                                    #
+# inputMatrix : Weight matrix of input (type:torch.tesnor(V,D))                   #
+# outputMatrix : Activated Weight matrix of output (type:torch.tesnor(K,D))       #
+###################################################################################
+
+###############################  Output  ##########################################
+# loss : Loss value (type:torch.tensor(1))                                        #
+# grad_in : Gradient of inputMatrix (type:torch.tensor(1,D))                      #
+# grad_out : Gradient of outputMatrix (type:torch.tesnor(K,D))                    #
+###################################################################################
+
+    V, D = inputMatrix.size()
+    inputVector = inputMatrix[contextWords].sum(0)
+    out = outputMatrix.mm(inputVector.view(D,1))
+
+    out_for_loss = torch.sigmoid(out)
+    for i, path in enumerate(centerCode):
+        if(path == '1'):
+            out_for_loss[i] = 1 - out_for_loss[i]
+
+    loss = -torch.log(out_for_loss).sum()
+
+    grad = torch.sigmoid(out)
+    for i, path in enumerate(centerCode):
+        if (path == '0'):
+            grad[i] -= 1
+
+    grad_in = grad.view(1,-1).mm(outputMatrix)
+    grad_out = grad.mm(inputVector.view(1,-1))
+
+    return loss, grad_in, grad_out
+
+
+def CBOW_NS(contextWords, inputMatrix, outputMatrix):
+################################  Input  ##########################################
+# contextWords : Indices of contextwords (type:list(int))                          #
+# inputMatrix : Weight matrix of input (type:torch.tesnor(V,D))                   #
+# outputMatrix : Activated Weight matrix of output (type:torch.tesnor(K,D))       #
+###################################################################################
+
+###############################  Output  ##########################################
+# loss : Loss value (type:torch.tensor(1))                                        #
+# grad_in : Gradient of inputMatrix (type:torch.tensor(1,D))                      #
+# grad_out : Gradient of outputMatrix (type:torch.tesnor(K,D))                    #
+###################################################################################
+
+    V, D = inputMatrix.size()
+    inputVector = inputMatrix[contextWords].sum(0)
+    out = outputMatrix.mm(inputVector.view(D, 1))
+
+    out_for_loss = -out
+    out_for_loss[0] = -out_for_loss[0]
+
+    loss = -torch.log(torch.sigmoid(out_for_loss)).sum()
+
+    grad = torch.sigmoid(out)
+    grad[0] -= 1
+
+    grad_in = grad.view(1,-1).mm(outputMatrix)
+    grad_out = grad.mm(inputVector.view(1,-1))
+
+    return loss, grad_in, grad_out
+
+
+def word2vec_trainer(input_seq, target_seq, numwords, codes, stats, mode="CBOW", NS=20, dimension=10000, learning_rate=0.025, epoch=3):
 # train_seq : list(tuple(int, list(int))
 
 # Xavier initialization of weight matrices
@@ -92,73 +278,83 @@ def word2vec_trainer(train_seq, numwords, stats, mode="CBOW", dimension=100, lea
     W_out = torch.randn(numwords, dimension) / (dimension**0.5)
     i=0
     losses=[]
+    print("# of training samples", len(input_seq))
+    stats = torch.LongTensor(stats)
 
-    print("# of training samples")
-    if mode=="CBOW":
-    	print(len(train_seq))
-    elif mode=="SG":
-    	print(len(train_seq)*len(train_seq[0][1]))
-    print()
+    # Build a corresponding Huffman Tree
+    tree = HuffmanTree(codes.values())
 
     for _ in range(epoch):
-        #Random shuffle of training data
-        shuffle(train_seq)
         #Training word2vec using SGD(Batch size : 1)
-        for center, contexts in train_seq:
+        for inputs, output in zip(input_seq,target_seq):
             i+=1
-            centerInd = center
-            contextInds = contexts
             if mode=="CBOW":
-                L, G_in, G_out = CBOW(centerInd, contextInds, W_in, W_out)
-                
-                W_in[contextInds] -= learning_rate*G_in
-                W_out -= learning_rate*G_out
+                if NS==0:
+                    #Only use the activated rows of the weight matrix
+                    #activated should be torch.tensor(K,) so that activated W_out has the form of torch.tensor(K, D)
+                    output_path = FindPath(codes[output], tree)
+                    activated = torch.tensor(output_path).view(-1, )
 
-                losses.append(L.item())
+                    L, G_in, G_out = CBOW_HS(inputs, codes[output], W_in, W_out[activated])
+                    W_in[inputs] -= learning_rate*G_in
+                    W_out[activated] -= learning_rate*G_out
+                else:
+                    #Only use the activated rows of the weight matrix
+                    #activated should be torch.tensor(K,) so that activated W_out has the form of torch.tensor(K, D)
+                    random_idx = torch.randint(0, len(stats), size=(NS,))
+                    neg_sample = (stats.view(-1, ))[random_idx]
+                    activated = torch.cat([torch.tensor([output]), neg_sample], 0)
+
+                    L, G_in, G_out = CBOW_NS(inputs, W_in, W_out[activated])
+                    W_in[inputs] -= learning_rate*G_in
+                    W_out[activated] -= learning_rate*G_out
+
             elif mode=="SG":
-            	for contextInd in contextInds:
-	                L, G_in, G_out = skipgram(centerInd, contextInd, W_in, W_out)
-	                
-	                W_in[centerInd] -= learning_rate*G_in.squeeze()
-	                W_out -= learning_rate*G_out
+                if NS==0:
+                    #Only use the activated rows of the weight matrix
+                    #activated should be torch.tensor(K,) so that activated W_out has the form of torch.tensor(K, D)
+                    output_path = FindPath(codes[output], tree)
+                    activated = torch.tensor(output_path).view(-1, )
 
-	                losses.append(L.item())
+                    L, G_in, G_out = skipgram_HS(inputs, codes[output], W_in, W_out[activated])
+                    W_in[inputs] -= learning_rate*G_in.squeeze()
+                    W_out[activated] -= learning_rate*G_out
+                else:
+                    #Only use the activated rows of the weight matrix
+                    #activated should be torch.tensor(K,) so that activated W_out has the form of torch.tensor(K, D)
+                    random_idx = torch.randint(0, len(stats), size=(NS, ))
+                    neg_sample = (stats.view(-1,))[random_idx]
+                    activated = torch.cat([torch.tensor([output]), neg_sample], 0)
+
+                    L, G_in, G_out = skipgram_NS(inputs, W_in, W_out[activated])
+                    W_in[inputs] -= learning_rate*G_in.squeeze()
+                    W_out[activated] -= learning_rate*G_out
+
+                
             else:
                 print("Unkwnown mode : "+mode)
                 exit()
-
-            if i%10000==0:
+            losses.append(L.item())
+            if i%100000==0:
             	avg_loss=sum(losses)/len(losses)
-            	print("Loss : %f" %(avg_loss,))
+            	print("Iteration:", i, "Loss : %f" %(avg_loss,))
             	losses=[]
 
     return W_in, W_out
-
-def sim(testword, word2ind, ind2word, matrix):
-    length = (matrix*matrix).sum(1)**0.5
-    wi = word2ind[testword]
-    inputVector = matrix[wi].reshape(1,-1)/length[wi]
-    sim = (inputVector@matrix.t())[0]/length
-    values, indices = sim.squeeze().topk(5)
-    
-    print()
-    print("===============================================")
-    print("The most similar words to \"" + testword + "\"")
-    for ind, val in zip(indices,values):
-        print(ind2word[ind.item()]+":%.3f"%(val,))
-    print("===============================================")
-    print()
 
 
 def main():
     parser = argparse.ArgumentParser(description='Word2vec')
     parser.add_argument('mode', metavar='mode', type=str,
                         help='"SG" for skipgram, "CBOW" for CBOW')
+    parser.add_argument('ns', metavar='negative_samples', type=int,
+                        help='0 for hierarchical softmax, the other numbers would be the number of negative samples')
     parser.add_argument('part', metavar='partition', type=str,
                         help='"part" if you want to train on a part of corpus, "full" if you want to train on full corpus')
     args = parser.parse_args()
     mode = args.mode
     part = args.part
+    ns = args.ns
 
 	#Load and preprocess corpus
     print("loading...")
@@ -174,12 +370,11 @@ def main():
     corpus = text.split()
     stats = Counter(corpus)
     words = []
+
     #Discard rare words
     for word in corpus:
         if stats[word]>4:
             words.append(word)
-
-    freqtable = []
     vocab = set(words)
 
     #Give an index number to a word
@@ -193,37 +388,62 @@ def main():
     for k,v in w2i.items():
         i2w[v]=k
 
+
+    #Code dict for hierarchical softmax
+    freqdict={}
+    freqdict[0]=10
+    for word in vocab:
+        freqdict[w2i[word]]=stats[word]
+    codedict = HuffmanCoding().build(freqdict)
+
     #Frequency table for negative sampling
+    freqtable = [0,0,0]
     for k,v in stats.items():
         f = int(v**0.75)
         for _ in range(f):
             if k in w2i.keys():
                 freqtable.append(w2i[k])
 
+    words = subsampling(words)
+    #Make training set
     print("build training set...")
-    #Make tuples of (centerword, contextwords) for training
-    train_set = []
+    input_set = []
+    target_set =[]
     window_size = 5
-    for j in range(len(words)):
-        if j<window_size:
-            contextlist = [0 for _ in range(window_size-j)] + [w2i[words[k]] for k in range(j)] + [w2i[words[j+k+1]] for k in range(window_size)]
-            train_set.append((w2i[words[j]],contextlist))
-        elif j>=len(words)-window_size:
-            contextlist = [w2i[words[j-k-1]] for k in range(window_size)] + [w2i[words[len(words)-k-1]] for k in range(len(words)-j-1)] + [0 for _ in range(j+window_size-len(words)+1)]
-            train_set.append((w2i[words[j]],contextlist))
-        else:
-            contextlist = [w2i[words[j-k-1]] for k in range(window_size)] + [w2i[words[j+k+1]] for k in range(window_size)]
-            train_set.append((w2i[words[j]],[w2i[words[j-1]],w2i[words[j+1]]]))
+    if mode=="CBOW":
+        for j in range(len(words)):
+            if j<window_size:
+                input_set.append([0 for _ in range(window_size-j)] + [w2i[words[k]] for k in range(j)] + [w2i[words[j+k+1]] for k in range(window_size)])
+                target_set.append(w2i[words[j]])
+            elif j>=len(words)-window_size:
+                input_set.append([w2i[words[j-k-1]] for k in range(window_size)] + [w2i[words[len(words)-k-1]] for k in range(len(words)-j-1)] + [0 for _ in range(j+window_size-len(words)+1)])
+                target_set.append(w2i[words[j]])
+            else:
+                input_set.append([w2i[words[j-k-1]] for k in range(window_size)] + [w2i[words[j+k+1]] for k in range(window_size)])
+                target_set.append(w2i[words[j]])
+    if mode=="SG":
+        for j in range(len(words)):
+            if j<window_size:
+                input_set += [w2i[words[j]] for _ in range(window_size*2)]
+                target_set += [0 for _ in range(window_size-j)] + [w2i[words[k]] for k in range(j)] + [w2i[words[j+k+1]] for k in range(window_size)]
+            elif j>=len(words)-window_size:
+                input_set += [w2i[words[j]] for _ in range(window_size*2)]
+                target_set += [w2i[words[j-k-1]] for k in range(window_size)] + [w2i[words[len(words)-k-1]] for k in range(len(words)-j-1)] + [0 for _ in range(j+window_size-len(words)+1)]
+            else:
+                input_set += [w2i[words[j]] for _ in range(window_size*2)]
+                target_set += [w2i[words[j-k-1]] for k in range(window_size)] + [w2i[words[j+k+1]] for k in range(window_size)]
 
     print("Vocabulary size")
     print(len(w2i))
 
     #Training section
-    emb,_ = word2vec_trainer(train_set, len(w2i), freqtable, mode=mode, dimension=64, epoch=1, learning_rate=0.05)
-    
-    #Print similar words
-    testwords = ["one", "are", "he", "have", "many", "first", "all", "world", "people", "after"]
-    for tw in testwords:
-        sim(tw,w2i,i2w,emb)
+    emb,_ = word2vec_trainer(input_set, target_set, len(w2i), codedict, freqtable, mode=mode, NS=ns, dimension=64, epoch=1, learning_rate=0.01)
+
+    #Creating embedding dictionary
+    emb_dict = {}
+    for i in range(len(w2i)):
+        emb_dict[i2w[i]] = emb[i]
+    #Starting Analogical task
+    Analogical_Reasoning_Task(emb_dict)
 
 main()
